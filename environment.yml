@@ -1,0 +1,4 @@
+name: chatbot-env
+channels:
+  - conda-forge
+prefix: /Users/mintie/miniforge3/envs/chatbot-env
