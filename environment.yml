@@ -1,4 +1,4 @@
-name: chatbot-env
+name: prodbot-env
 channels:
   - conda-forge
-prefix: /Users/mintie/miniforge3/envs/chatbot-env
+prefix: /Users/mintie/miniforge3/envs/prodbot-env
