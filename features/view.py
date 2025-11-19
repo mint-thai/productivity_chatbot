@@ -40,7 +40,7 @@ def filter_tasks_by_date(results, date_filter=None):
     return filtered
 
 
-def format_tasks_list(results, date_filter=None):
+def format_tasks_list(results, date_filter=None, show_all=False):
     # Apply date filter if specified
     if date_filter:
         results = filter_tasks_by_date(results, date_filter)
@@ -52,8 +52,8 @@ def format_tasks_list(results, date_filter=None):
         return "No tasks found."
 
     buckets = {"In progress": [], "Not started": [], "Completed": []}
-    # Priority indicators: 🔴 High, 🟣 Medium, 🔵 Low
-    priority_prefix = {"High": "🔴", "Medium": "🟣", "Low": "🔵"}
+    # Priority indicators: 🔴 High, 🟡 Medium, 🔵 Low
+    priority_prefix = {"High": "🔴", "Medium": "🟡", "Low": "🔵"}
 
     for row in results:
         try:
@@ -92,18 +92,19 @@ def format_tasks_list(results, date_filter=None):
 
     # Build final output
     lines = []
+    limit = None if show_all else 3
 
     if buckets["In progress"]:
         lines.append("*IN PROGRESS*")
-        lines.extend(buckets["In progress"][:3])
+        lines.extend(buckets["In progress"][:limit])
 
     if buckets["Not started"]:
         lines.append("\n*NOT STARTED*")
-        lines.extend(buckets["Not started"][:3])
+        lines.extend(buckets["Not started"][:limit])
 
     if buckets["Completed"]:
         lines.append("\n*COMPLETED*")
-        lines.extend(buckets["Completed"][:3])
+        lines.extend(buckets["Completed"][:limit])
 
     output = "\n".join(lines).strip()
     return output or "No tasks found."

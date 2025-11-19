@@ -82,3 +82,30 @@ def set_task_status_by_name(task_name: str, status_name: str) -> dict:
         return {"success": False, "message": f"Task not found: {task_name}"}
     page_id = _get_page_id(row)
     return update_task_status(page_id, status_name)
+
+
+def archive_task(page_id: str) -> dict:
+    """
+    Archive (soft delete) a Notion task page by setting archived=true.
+    """
+    if not page_id:
+        return {"success": False, "message": "Missing page_id"}
+
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    payload = {"archived": True}
+    r = requests.patch(url, headers=HEADERS, json=payload)
+    if r.status_code == 200:
+        return {"success": True, "message": "Task archived successfully."}
+    return {
+        "success": False,
+        "message": f"Failed to archive task: {r.status_code} {r.text[:150]}"
+    }
+
+
+def delete_task_by_name(task_name: str) -> dict:
+    """Convenience helper to find a task by name and archive it."""
+    row = find_task_by_name(task_name)
+    if not row:
+        return {"success": False, "message": f"Task not found: {task_name}"}
+    page_id = _get_page_id(row)
+    return archive_task(page_id)

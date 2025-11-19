@@ -75,11 +75,19 @@ def parse_task_input(text: str) -> dict:
         elif due_str in ["nextweek", "next-week"]:
             task_data["due_date"] = (today + timedelta(weeks=1)).strftime("%Y-%m-%d")
         else:
+            # Try standard format first
             try:
                 parsed = datetime.strptime(due_str, "%Y-%m-%d")
                 task_data["due_date"] = parsed.strftime("%Y-%m-%d")
             except ValueError:
-                pass  # ignore bad dates
+                # Try alternative formats
+                for fmt in ["%m-%d-%Y", "%m/%d/%Y", "%Y/%m/%d"]:
+                    try:
+                        parsed = datetime.strptime(due_str, fmt)
+                        task_data["due_date"] = parsed.strftime("%Y-%m-%d")
+                        break
+                    except ValueError:
+                        continue
 
     # Remaining text = task name
     task_data["name"] = original.strip()
