@@ -47,7 +47,10 @@ def parse_task_input(text: str) -> dict:
     for key, val in priority_map.items():
         if key in original.lower():
             task_data["priority"] = val
-            original = original.replace(key, "").strip()
+            # Remove priority using case-insensitive replacement
+            import re
+            original = re.sub(re.escape(key), "", original, flags=re.IGNORECASE).strip()
+            break
 
     # --- Extract project FIRST (to avoid conflict with due date) ---
     if "project:" in original.lower():

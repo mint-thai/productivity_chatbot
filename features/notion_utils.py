@@ -109,3 +109,61 @@ def delete_task_by_name(task_name: str) -> dict:
         return {"success": False, "message": f"Task not found: {task_name}"}
     page_id = _get_page_id(row)
     return archive_task(page_id)
+
+
+def update_due_date(page_id: str, due_date: str) -> dict:
+    """Update the Due date property of a Notion task page."""
+    if not page_id:
+        return {"success": False, "message": "Missing page_id"}
+    
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    payload = {
+        "properties": {
+            "Due date": {"date": {"start": due_date}}
+        }
+    }
+    r = requests.patch(url, headers=HEADERS, json=payload)
+    if r.status_code == 200:
+        return {"success": True, "message": f"Due date updated to {due_date}."}
+    return {
+        "success": False,
+        "message": f"Failed to update due date: {r.status_code} {r.text[:150]}"
+    }
+
+
+def update_due_date_by_name(task_name: str, due_date: str) -> dict:
+    """Convenience helper to find a task by name and update its due date."""
+    row = find_task_by_name(task_name)
+    if not row:
+        return {"success": False, "message": f"Task not found: {task_name}"}
+    page_id = _get_page_id(row)
+    return update_due_date(page_id, due_date)
+
+
+def update_due_date(page_id: str, due_date: str) -> dict:
+    """Update the Due date property of a Notion task page."""
+    if not page_id:
+        return {"success": False, "message": "Missing page_id"}
+    
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    payload = {
+        "properties": {
+            "Due date": {"date": {"start": due_date}}
+        }
+    }
+    r = requests.patch(url, headers=HEADERS, json=payload)
+    if r.status_code == 200:
+        return {"success": True, "message": f"Due date updated to {due_date}."}
+    return {
+        "success": False,
+        "message": f"Failed to update due date: {r.status_code} {r.text[:150]}"
+    }
+
+
+def update_due_date_by_name(task_name: str, due_date: str) -> dict:
+    """Convenience helper to find a task by name and update its due date."""
+    row = find_task_by_name(task_name)
+    if not row:
+        return {"success": False, "message": f"Task not found: {task_name}"}
+    page_id = _get_page_id(row)
+    return update_due_date(page_id, due_date)

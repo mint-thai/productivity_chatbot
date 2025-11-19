@@ -7,16 +7,17 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 import google.generativeai as genai
 
-from features.notion_utils import get_tasks_raw, set_task_status_by_name, delete_task_by_name
+from features.notion_utils import get_tasks_raw, set_task_status_by_name, delete_task_by_name, update_due_date_by_name
 from features.view import format_tasks_list
 from features.add import add_task_from_text
 from features.pomodoro import start_pomodoro, start_break, pomodoro_status, stop_pomodoro
-
 from features.habits import init_db as habits_init, add_habit, log_habit, list_habits, current_streak
 from features.analytics import init_db as analytics_init, summary_last_7_days
 from features.recommend import recommend, format_recommendations
 from features.music import get_music_menu, get_song_by_choice, get_random_song
 from features.schedule_parser import tasks_from_image_bytes
+from features.translate import (set_language, get_language, translate_text, get_language_menu, 
+                                 SUPPORTED_LANGUAGES, enable_tts, disable_tts, is_tts_enabled, text_to_speech)
 from app.config import validate_env
 
 # --- Load environment variables ---
@@ -30,40 +31,74 @@ genai.configure(api_key=GOOGLE_API_KEY)
 MODEL = "gemini-2.5-flash"
 llm = genai.GenerativeModel(MODEL)
 
+# --- TTS Helper Function ---
+async def send_with_tts(update: Update, text: str, **kwargs):
+    """Send message and optionally send TTS audio if enabled (translates to user's language)"""
+    user_id = update.effective_user.id
+    
+    # Send text message
+    msg = await update.message.reply_text(text, **kwargs)
+    
+    # If TTS enabled, send audio too
+    if is_tts_enabled(user_id):
+        try:
+            lang = get_language(user_id)
+            # Clean text for TTS (remove markdown, emojis, limit length)
+            clean_text = text.replace("**", "").replace("*", "").replace("_", "").replace("`", "")
+            clean_text = clean_text.replace("✨", "").strip()
+            if len(clean_text) > 500:
+                clean_text = clean_text[:500] + "..."
+            
+            # Translate if not English
+            if lang != "en":
+                from features.translate import translate_text
+                clean_text = translate_text(clean_text, lang)
+            
+            audio_buffer = text_to_speech(clean_text, lang)
+            await update.message.reply_voice(voice=audio_buffer)
+            print(f"✓ TTS sent for user {user_id} in {lang}")
+        except Exception as e:
+            print(f"TTS error: {e}")
+    
+    return msg
+
 # --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Hi, I'm Kairos, a student-friendly productivity assistant.\n"
         "I help you manage tasks, focus with Pomodoro, track habits, and stay on top of deadlines.\n\n"
-        "Task commands:\n"
+        "Task Management:\n"
         "• /tasks — View your Notion tasks\n"
-        "• /add TaskName [priority] due:DATE project:Project — Add new task\n"
-        "  Example: /add Study [high] due:tomorrow project:Math\n"
-        "• /done <task> — Mark a task completed\n"
-        "• /status <task>, <Not started|In Progress|Completed> — Update status\n\n"
-        "Pomodoro:\n"
-        "• /pomodoro [task] — Start a 25-min focus session\n"
-        "• /pomodoro_break — Start a 5-min break\n"
-        "• /pomodoro_status — Check timer status\n"
-        "• /pomodoro_stop — Stop current session\n\n"
-        "Reminders:\n"
+        "• /add — Add new task\n"
+        "• /done <task> — Mark task completed\n"
+        "• /delete <task> — Delete a task\n"
+        "• /status <task>, <status> — Update status\n\n"
+        "Reminder:\n"
         "• /reminder — Send email reminder now\n\n"
-        "Motivation:\n"
-        "• /motivate — Get a motivational quote\n\n"
-        "Habits:\n"
+        "Recommendation:\n"
+        "• /recommend — Get your next best task\n\n"
+        "Pomodoro:\n"
+        "• /pomodoro [task] — Start 25-min focus session\n"
+        "• /pomodoro_break — Start 5-min break\n"
+        "• /pomodoro_status — Check timer\n"
+        "• /pomodoro_stop — Stop session\n\n"
+        "Focus Music:\n"
+        "• /music — Browse focus music\n\n"
+        "Habit Tracker:\n"
         "• /habit_add <name>\n"
         "• /habit_log <name>\n"
         "• /habit_list\n"
         "• /habit_streak <name>\n\n"
-        "Recommendations:\n"
-        "• /recommend — Get your next best task\n\n"
+        "Motivation:\n"
+        "• /motivate — Get a motivational quote\n\n"
+        "Q&A:\n"
+        "• Ask productivity questions (e.g., \"I need tips on time management\")\n\n"
+        "Language & Audio:\n"
+        "• /language — View languages & audio settings\n"
+        "• /tts_on — Enable audio 🔊\n"
+        "• /tts_off — Disable audio 🔇\n\n"
         "Analytics:\n"
-        "• /analytics — Weekly focus summary\n\n"
-        "Focus Music:\n"
-        "• /music — Browse focus music (lo-fi, piano, rain, etc.)\n\n"
-        "Schedule Import:\n"
-        "• Send screenshot + \"parse this schedule\" — AI extracts tasks\n\n"
-        "You can also ask questions about productivity. I'll keep it real and helpful."
+        "• /analytics — Weekly summary"
     )
 
 
@@ -89,7 +124,8 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "**Examples:**\n"
             "• /add Study for exam\n"
             "• /add Finish homework [high] due:tomorrow\n"
-            "• /add Review notes due:2025-12-15 project:Math\n"
+            "• /add Review notes [medium] due:2025-12-15 project:Math\n"
+            "\n**Priority must be in brackets:** [high], [medium], or [low]\n"
             "• /add Write report [medium] due:2025-11-25 project:ADSC 3710\n\n"
             "**Options:**\n"
             "• Priority: [high], [medium], [low] (default: medium)\n"
@@ -206,23 +242,28 @@ Output ONLY a minified JSON object with keys exactly as in the schema. Do not in
 
 Schema:
 {{
-  "intent": "update_status|mark_done|add_task|start_pomodoro|stop_pomodoro|habit_add|habit_log|habit_list|habit_streak|focus_music|delete_task|send_reminder|motivate|recommend|analytics|import_schedule|none",
+  "intent": "update_status|mark_done|add_task|start_pomodoro|stop_pomodoro|habit_add|habit_log|habit_list|habit_streak|focus_music|delete_task|update_due_date|send_reminder|motivate|recommend|analytics|import_schedule|none",
   "task_name": "string|null",
   "status": "Not started|In progress|Completed|null",
   "habit_name": "string|null",
-  "add_task_text": "string|null"
+  "add_task_text": "string|null",
+  "due_date": "string|null"
 }}
 
 Rules:
 - status must be one of: Not started, In progress, Completed (normalize user's phrasing to these).
 - task_name should be taken from the following current task titles when possible; use the exact title if you can match it.
 - If you can't confidently identify a specific task, set task_name to null and use intent:"none".
-- For add_task: Set intent to "add_task" if the user provides actual task details in conversational format. Extract the key information and format as: "TaskName [priority] due:YYYY-MM-DD project:ProjectName". Examples:
-  * "Create report for Math due Nov 20" → "report for Math due:2025-11-20"
-  * "Write essay [high] for English class due tomorrow" → "essay [high] due:tomorrow project:English"
-  * "Chatbot Report for ADSC 3710 project and due on November 21, 2025" → "Chatbot Report due:2025-11-21 project:ADSC 3710"
-  If they just say "add a task" without ANY details, return intent:"none".
+- For add_task: ONLY set intent to "add_task" if the user provides SPECIFIC task details with at least a task name. The user must describe WHAT the task is. Vague requests like "add a task", "add a new task", "can you add a task for me", "create a task" WITHOUT any task description should return intent:"none". Examples:
+  * "Create report for Math due Nov 20" → "report for Math due:2025-11-20" ✓
+  * "Write essay [high] for English class due tomorrow" → "essay [high] due:tomorrow project:English" ✓
+  * "Chatbot Report for ADSC 3710 project and due on November 21, 2025" → "Chatbot Report due:2025-11-21 project:ADSC 3710" ✓
+  * "add a task" → intent:"none" ✗
+  * "can you add a new task for me?" → intent:"none" ✗
+  * "create a task" → intent:"none" ✗
 - For delete_task: only set intent if a specific task is named. Vague requests like "delete a task" should return intent:"none".
+- For start_pomodoro: Use when user wants to start a Pomodoro/focus session. Examples: "start pomodoro", "begin focus session", "start a pomodoro for Math homework", "pomodoro session for essay", "start 25 min timer". Extract task_name if mentioned.
+- For stop_pomodoro: Use when user wants to stop/end the current Pomodoro session. Examples: "stop pomodoro", "end session", "cancel timer", "stop the focus session".
 - For send_reminder: ONLY when user explicitly says "send me a reminder now" or "send reminder now" or very similar explicit phrasing. DO NOT trigger on general questions like "what's due" or "check my tasks".
 - For motivate: Use when user asks for motivation, encouragement, inspiration, quotes, or boost. Examples: "motivate me", "I need inspiration", "give me a quote", "encourage me", "drop a micro motivation", "give me a wake-up punchline", "a little boost of the day", "quote of the day", "I'm feeling down".
 - For recommend: Use when user asks what to work on next, what to prioritize, what's most important, or wants task recommendations. Examples: "what should I work on?", "what's my priority?", "what should I do next?", "recommend a task", "what's most urgent?", "help me prioritize".
@@ -294,6 +335,21 @@ User message:
             res = delete_task_by_name(name)
             await update.message.reply_text(res.get("message", f"Deleted '{name}'."))
             return True
+        
+        if intent == "update_due_date":
+            from features.add import parse_due_date
+            name = (data.get("task_name") or "").strip()
+            due_date_str = (data.get("due_date") or "").strip()
+            if not name or not due_date_str:
+                return False
+            # Parse the due date using the same logic as /add
+            due_date = parse_due_date(due_date_str)
+            if not due_date:
+                await update.message.reply_text(f"Invalid due date format: {due_date_str}")
+                return True
+            res = update_due_date_by_name(name, due_date)
+            await update.message.reply_text(res.get("message", f"Due date updated for '{name}'."))
+            return True
 
         if intent == "add_task":
             add_text = (data.get("add_task_text") or "").strip()
@@ -351,26 +407,26 @@ User message:
             return True
 
         if intent == "motivate":
-            # Send motivational quote only
+            # Send motivational quote with TTS
             from features.motivate import get_random_quote
             quote = get_random_quote()
-            await update.message.reply_text(f"✨ {quote}")
+            await send_with_tts(update, f"✨ {quote}")
             return True
 
         if intent == "recommend":
             # Show task recommendations
             rows = recommend(get_tasks_raw())
-            await update.message.reply_text(format_recommendations(rows))
+            await send_with_tts(update, format_recommendations(rows))
             return True
 
         if intent == "analytics":
             # Show productivity analytics
-            await update.message.reply_text(summary_last_7_days())
+            await send_with_tts(update, summary_last_7_days())
             return True
 
         if intent == "focus_music":
-            song = get_random_song()
-            await update.message.reply_text(f"🎵 {song['name']}\n\n{song['url']}")
+            from features.music import get_music_menu
+            await update.message.reply_text(get_music_menu(), parse_mode="Markdown")
             return True
 
         if intent == "import_schedule":
@@ -438,6 +494,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.lower() in greetings or text.lower().startswith(tuple(greetings)):
         await update.message.reply_text(
             "Hi, I'm Kairos — your productivity chatbot.\nHow can I help you today?"
+        )
+        return
+
+    # Check if user is asking how to add a task (without task details)
+    text_lower = text.lower()
+    vague_add_phrases = ["add a new task", "add task", "create a task", "create task", "new task"]
+    if any(phrase in text_lower for phrase in vague_add_phrases) and len(text_lower.split()) <= 8:
+        await update.message.reply_text(
+            "To add a task, use this format:\n\n"
+            "/add TaskName [priority] due:DATE project:ProjectName\n\n"
+            "Examples:\n"
+            "• /add Study for exam [high] due:tomorrow\n"
+            "• /add Essay [medium] project:English due:next week\n"
+            "• /add Coffee Chat [low] due:11/21/2025 project:Career\n\n"
+            "**Priority must be in brackets:** [high], [medium], or [low]\n\n"
+            "Or tell me naturally:\n"
+            "\"Add Math homework [high] due Nov 25\"",
+            parse_mode="Markdown"
         )
         return
 
@@ -564,7 +638,7 @@ if __name__ == "__main__":
         """Send a motivational quote"""
         from features.motivate import get_random_quote
         quote = get_random_quote()
-        await update.message.reply_text(f"✨ {quote}")
+        await send_with_tts(update, f"✨ {quote}")
     
     app.add_handler(CommandHandler("motivate", motivate_cmd))
 
@@ -650,7 +724,17 @@ if __name__ == "__main__":
         res = set_task_status_by_name(name, notion_status)
         await update.message.reply_text(res.get("message", "Updated."))
 
+    async def delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Delete a task by name."""
+        name = " ".join(context.args).strip()
+        if not name:
+            await update.message.reply_text("Usage: /delete <task name>")
+            return
+        res = delete_task_by_name(name)
+        await update.message.reply_text(res.get("message", "Task deleted."))
+
     app.add_handler(CommandHandler("done", done_cmd))
+    app.add_handler(CommandHandler("delete", delete_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
 
     # Habits
@@ -713,6 +797,36 @@ if __name__ == "__main__":
     
     # Support multiple aliases: /music, /tunes, /play
     app.add_handler(CommandHandler(["music", "tunes", "play"], music_cmd))
+
+    # Language settings
+    async def language_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        
+        # If no args, show menu
+        if not context.args:
+            await update.message.reply_text(get_language_menu(), parse_mode="Markdown")
+            return
+        
+        # Set language
+        lang_code = context.args[0].lower()
+        result = set_language(user_id, lang_code)
+        await update.message.reply_text(result["message"])
+    
+    app.add_handler(CommandHandler("language", language_cmd))
+
+    # TTS commands
+    async def tts_on_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        result = enable_tts(user_id)
+        await update.message.reply_text(result["message"])
+    
+    async def tts_off_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        result = disable_tts(user_id)
+        await update.message.reply_text(result["message"])
+    
+    app.add_handler(CommandHandler("tts_on", tts_on_cmd))
+    app.add_handler(CommandHandler("tts_off", tts_off_cmd))
 
     # Import schedule
     async def import_schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):

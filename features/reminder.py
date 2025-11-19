@@ -83,12 +83,12 @@ def send_email_sendgrid(subject: str, body: str, recipient: str = None):
 
 
 def get_upcoming_tasks(hours_ahead: int = 24):
-    """Get tasks due within the specified number of hours."""
+    """Get tasks due today or tomorrow (within next 24 hours)."""
     all_tasks = get_tasks_raw()
     upcoming = []
     
-    now = datetime.now()
-    cutoff_time = now + timedelta(hours=hours_ahead)
+    today = datetime.now().date()
+    tomorrow = today + timedelta(days=1)
     
     for task in all_tasks:
         try:
@@ -111,12 +111,13 @@ def get_upcoming_tasks(hours_ahead: int = 24):
             
             if due_start:
                 date_part = due_start[:10]
-                due_date = datetime.strptime(date_part, "%Y-%m-%d")
+                due_date = datetime.strptime(date_part, "%Y-%m-%d").date()
                 
-                if now <= due_date <= cutoff_time:
+                # Include tasks due today or tomorrow
+                if due_date == today or due_date == tomorrow:
                     upcoming.append({
                         "name": name,
-                        "due_date": due_date,
+                        "due_date": datetime.combine(due_date, datetime.min.time()),
                         "priority": priority,
                         "status": status
                     })

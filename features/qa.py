@@ -57,38 +57,47 @@ User question:
 
 def is_productivity_question(text: str) -> bool:
     """
-    Check if text is likely a productivity-related question.
+    Check if text is EXPLICITLY asking for productivity help/tips/advice.
+    Very strict - only triggers on clear help requests, not commands or statements.
     
     Args:
         text: User's message
     
     Returns:
-        bool: True if it appears to be a productivity question
+        bool: True if it's clearly asking for productivity advice
     """
-    # Question indicators
-    question_words = ["how", "what", "why", "when", "where", "should", "can", "could", "would"]
-    question_markers = ["?", "help", "advice", "tips", "suggest"]
-    
     text_lower = text.lower()
     
-    # Check for question words or markers
-    has_question_indicator = (
-        any(text_lower.startswith(word) for word in question_words) or
-        any(marker in text_lower for marker in question_markers) or
-        text.endswith("?")
-    )
-    
-    # Productivity topics
-    productivity_keywords = [
-        "time", "manage", "organize", "productive", "focus", "study", "work",
-        "balance", "priority", "deadline", "task", "schedule", "plan",
-        "motivation", "burnout", "stress", "exam", "assignment", "job",
-        "interview", "application", "course", "procrastinate"
+    # EXPLICIT help request phrases - user must clearly ask for help/tips/advice
+    explicit_help_phrases = [
+        "i need help",
+        "i need tips",
+        "i need advice",
+        "give me tips",
+        "give me advice",
+        "help me",
+        "any tips",
+        "any advice",
+        "can you help",
+        "how do i",
+        "how can i",
+        "how should i",
+        "what should i do",
+        "tips for",
+        "advice on",
+        "advice for"
     ]
     
-    has_productivity_topic = any(keyword in text_lower for keyword in productivity_keywords)
+    # Must contain one of these explicit phrases
+    is_explicit_help = any(phrase in text_lower for phrase in explicit_help_phrases)
     
-    return has_question_indicator and has_productivity_topic and len(text.split()) >= 3
+    # Must also be a question (ends with ?) OR contains help/tips/advice
+    is_question_format = text.endswith("?") or any(word in text_lower for word in ["help", "tips", "advice"])
+    
+    # Must be substantial (at least 4 words)
+    is_substantial = len(text.split()) >= 4
+    
+    return is_explicit_help and is_question_format and is_substantial
 
 
 def get_brief_task_summary(tasks_list: list, max_tasks: int = 5) -> str:
