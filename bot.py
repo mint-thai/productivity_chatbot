@@ -11,12 +11,12 @@ from features.notion_utils import get_tasks_raw, set_task_status_by_name, delete
 from features.view import format_tasks_list
 from features.add import add_task_from_text
 from features.pomodoro import start_pomodoro, start_break, pomodoro_status, stop_pomodoro
-from features.telegram_reminders import enable_daily_reminders, disable_daily_reminders, enable_daily_nudges, disable_daily_nudges
+
 from features.habits import init_db as habits_init, add_habit, log_habit, list_habits, current_streak
 from features.analytics import init_db as analytics_init, summary_last_7_days
 from features.recommend import recommend, format_recommendations
-from features.music import get_focus_link
-from features.schedule_parser import parse_text_to_tasks, tasks_from_pdf_bytes
+from features.music import get_music_menu, get_song_by_choice, get_random_song
+from features.schedule_parser import tasks_from_image_bytes
 from app.config import validate_env
 
 # --- Load environment variables ---
@@ -36,30 +36,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Hi, I'm Kairos, a student-friendly productivity assistant.\n"
         "I help you manage tasks, focus with Pomodoro, track habits, and stay on top of deadlines.\n\n"
         "Task commands:\n"
-        "- /tasks — View your Notion tasks\n"
-        "- /add TaskName [priority] due:DATE project:Project — Add new task\n"
+        "• /tasks — View your Notion tasks\n"
+        "• /add TaskName [priority] due:DATE project:Project — Add new task\n"
         "  Example: /add Study [high] due:tomorrow project:Math\n"
-        "- /done <task> — Mark a task completed\n"
-        "- /status <task>, <Not started|In Progress|Completed> — Update status\n\n"
+        "• /done <task> — Mark a task completed\n"
+        "• /status <task>, <Not started|In Progress|Completed> — Update status\n\n"
         "Pomodoro:\n"
-        "- /pomodoro [task] — Start a 25-min focus session\n"
-        "- /pomodoro_break — Start a 5-min break\n"
-        "- /pomodoro_status — Check timer status\n"
-        "- /pomodoro_stop — Stop current session\n\n"
+        "• /pomodoro [task] — Start a 25-min focus session\n"
+        "• /pomodoro_break — Start a 5-min break\n"
+        "• /pomodoro_status — Check timer status\n"
+        "• /pomodoro_stop — Stop current session\n\n"
+        "Reminders:\n"
+        "• /reminder — Send email reminder now\n\n"
         "Motivation:\n"
-        "- /motivate — Get a motivational quote\n\n"
+        "• /motivate — Get a motivational quote\n\n"
         "Habits:\n"
-        "- /habit_add <name>\n"
-        "- /habit_log <name>\n"
-        "- /habit_list\n"
-        "- /habit_streak <name>\n\n"
+        "• /habit_add <name>\n"
+        "• /habit_log <name>\n"
+        "• /habit_list\n"
+        "• /habit_streak <name>\n\n"
         "Recommendations:\n"
-        "- /recommend — Get your next best task\n"
-        "- /analytics — Weekly focus summary\n\n"
-        "Focus music:\n"
-        "- /focus_on — Get a focus music link\n\n"
-        "You can also ask questions about productivity. I'll keep it real and helpful.",
-        parse_mode="Markdown"
+        "• /recommend — Get your next best task\n\n"
+        "Analytics:\n"
+        "• /analytics — Weekly focus summary\n\n"
+        "Focus Music:\n"
+        "• /music — Browse focus music (lo-fi, piano, rain, etc.)\n\n"
+        "Schedule Import:\n"
+        "• Send screenshot + \"parse this schedule\" — AI extracts tasks\n\n"
+        "You can also ask questions about productivity. I'll keep it real and helpful."
     )
 
 
@@ -129,6 +133,7 @@ async def send_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📧 Sending email reminder...")
     
     try:
+
         result = check_and_send_reminders(hours_ahead=24)
         if result["success"]:
             await update.message.reply_text(
@@ -154,107 +159,7 @@ async def send_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def enable_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Enable daily email reminders at custom time"""
-    from datetime import time
-    from features.reminder import check_and_send_reminders
-    
-    # Parse time from arguments (format: HH:MM or HH:MM AM/PM or just HH)
-    hour = 8
-    minute = 0
-    
-    if context.args:
-        time_str = " ".join(context.args).strip().upper()  # Join all args to handle "7:20 PM"
-        
-        try:
-            # Check for AM/PM
-            is_pm = 'PM' in time_str
-            is_am = 'AM' in time_str
-            
-            # Remove AM/PM from string
-            time_str = time_str.replace('AM', '').replace('PM', '').strip()
-            
-            if ':' in time_str:
-                # Format: HH:MM
-                hour_str, min_str = time_str.split(':')
-                hour = int(hour_str)
-                minute = int(min_str)
-            else:
-                # Format: just HH
-                hour = int(time_str)
-            
-            # Convert 12-hour to 24-hour format
-            if is_pm and hour != 12:
-                hour += 12
-            elif is_am and hour == 12:
-                hour = 0
-            
-            # Validate
-            if not (0 <= hour <= 23):
-                await update.message.reply_text("Hour must be between 0-23. Example: /reminder_enable 8:30 PM or /reminder_enable 14:00")
-                return
-            if not (0 <= minute <= 59):
-                await update.message.reply_text("Minute must be between 0-59. Example: /reminder_enable 8:30 PM")
-                return
-        except ValueError:
-            await update.message.reply_text(
-                "Invalid time format. Use:\n"
-                "• /reminder_enable 8:30 AM (12-hour format)\n"
-                "• /reminder_enable 7:20 PM (12-hour format)\n"
-                "• /reminder_enable 14:00 (24-hour format)\n"
-                "• /reminder_enable 9 (defaults to AM)\n"
-                "• /reminder_enable (defaults to 8:00 AM)"
-            )
-            return
-    
-    # Schedule daily email reminder
-    async def email_reminder_callback(context: ContextTypes.DEFAULT_TYPE):
-        from features.reminder import check_and_send_reminders
-        check_and_send_reminders(hours_ahead=24)
-    
-    # Remove existing reminders for this user
-    current_jobs = context.job_queue.get_jobs_by_name(f"email_reminder_{update.effective_user.id}")
-    for job in current_jobs:
-        job.schedule_removal()
-    
-    # Schedule new reminder
-    reminder_time = time(hour=hour, minute=minute)
-    context.job_queue.run_daily(
-        email_reminder_callback,
-        time=reminder_time,
-        chat_id=update.effective_chat.id,
-        user_id=update.effective_user.id,
-        name=f"email_reminder_{update.effective_user.id}"
-    )
-    
-    # Display time in 12-hour format for user
-    display_hour = hour if hour <= 12 else hour - 12
-    if display_hour == 0:
-        display_hour = 12
-    am_pm = "AM" if hour < 12 else "PM"
-    time_display = f"{display_hour}:{minute:02d} {am_pm}"
-    
-    await update.message.reply_text(
-        f"✅ Daily email reminders enabled at {time_display}!\n\n"
-        f"Make sure your .env file has:\n"
-        f"• EMAIL_ADDRESS (your Gmail)\n"
-        f"• EMAIL_PASSWORD (Gmail App Password)\n"
-        f"• RECIPIENT_EMAIL (where to send)\n\n"
-        "💡 Tip: Use /reminder to test it right now!"
-    )
 
-
-async def disable_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Disable email reminders"""
-    # Remove scheduled email reminders
-    current_jobs = context.job_queue.get_jobs_by_name(f"email_reminder_{update.effective_user.id}")
-    
-    if current_jobs:
-        for job in current_jobs:
-            job.schedule_removal()
-        await update.message.reply_text("✅ Daily email reminders disabled.")
-    else:
-        await update.message.reply_text("No active email reminders to disable.")
 
 
 async def scheduled_reminder_callback(context: ContextTypes.DEFAULT_TYPE):
@@ -278,7 +183,8 @@ async def try_natural_action(update: Update, context: ContextTypes.DEFAULT_TYPE,
       - stop_pomodoro: {}
       - habit_add: { habit_name }
       - habit_log: { habit_name }
-      - enable_reminders | disable_reminders | enable_nudges | disable_nudges
+      - send_reminder: {}
+      - motivate: {}
 
     Returns True if an action was executed, else False.
     """
@@ -300,7 +206,7 @@ Output ONLY a minified JSON object with keys exactly as in the schema. Do not in
 
 Schema:
 {{
-        "intent": "update_status|mark_done|add_task|start_pomodoro|stop_pomodoro|habit_add|habit_log|focus_music|delete_task|send_reminder|motivate|none",
+  "intent": "update_status|mark_done|add_task|start_pomodoro|stop_pomodoro|habit_add|habit_log|habit_list|habit_streak|focus_music|delete_task|send_reminder|motivate|recommend|analytics|import_schedule|none",
   "task_name": "string|null",
   "status": "Not started|In progress|Completed|null",
   "habit_name": "string|null",
@@ -319,6 +225,13 @@ Rules:
 - For delete_task: only set intent if a specific task is named. Vague requests like "delete a task" should return intent:"none".
 - For send_reminder: ONLY when user explicitly says "send me a reminder now" or "send reminder now" or very similar explicit phrasing. DO NOT trigger on general questions like "what's due" or "check my tasks".
 - For motivate: Use when user asks for motivation, encouragement, inspiration, quotes, or boost. Examples: "motivate me", "I need inspiration", "give me a quote", "encourage me", "drop a micro motivation", "give me a wake-up punchline", "a little boost of the day", "quote of the day", "I'm feeling down".
+- For recommend: Use when user asks what to work on next, what to prioritize, what's most important, or wants task recommendations. Examples: "what should I work on?", "what's my priority?", "what should I do next?", "recommend a task", "what's most urgent?", "help me prioritize".
+- For habit_add: Use when user wants to create/add/start tracking a new habit. Examples: "add habit yoga", "start tracking calling family", "create habit sleep before 11pm", "track morning workout". Extract the habit name.
+- For habit_log: Use when user says they completed/did a habit today. Examples: "I did yoga", "completed yoga", "log yoga", "mark yoga done", "I called family today", "finished morning workout". Extract the habit name.
+- For habit_list: Use when user asks to see all habits, list habits, or show habits. Examples: "show me a list of habits", "what are my habits?", "list all habits", "show habits", "what habits am I tracking?".
+- For habit_streak: Use when user asks about their streak for a specific habit. Examples: "what's my streak with yoga?", "how many days of yoga?", "yoga streak", "streak for calling family", "how long have I been doing yoga?". Extract the habit name.
+- For analytics: Use when user asks about their productivity stats, focus sessions, weekly summary, or progress. Examples: "show me my analytics", "how productive was I this week?", "how many pomodoros did I do?", "show my stats", "weekly summary", "how focused was I?", "my productivity report".
+- For import_schedule: Use when user wants to extract/parse/import/scan tasks from a schedule screenshot OR when they say "parse this" or "import this" with a photo. Examples: "import my schedule", "parse this schedule", "parse this", "extract tasks from this", "import tasks from screenshot", "scan my schedule", "parse this for me", "import this schedule". ALWAYS set intent to "import_schedule" if user mentions parsing/importing/extracting a schedule/calendar/screenshot.
 - Vague requests without specifics should return intent:"none" so the conversational assistant can ask for details.
 
 Current tasks (titles):
@@ -341,6 +254,7 @@ User message:
             return False
 
         intent = (data.get("intent") or "none").lower()
+        print(f"DEBUG: Detected intent: {intent}")
         if intent == "none":
             return False
 
@@ -419,6 +333,18 @@ User message:
             await update.message.reply_text(msg)
             return True
 
+        if intent == "habit_list":
+            await update.message.reply_text(list_habits())
+            return True
+
+        if intent == "habit_streak":
+            habit_name = (data.get("habit_name") or "").strip()
+            if not habit_name:
+                return False
+            msg = current_streak(habit_name)
+            await update.message.reply_text(msg)
+            return True
+
         if intent == "send_reminder":
             # Send reminder now
             await send_reminder(update, context)
@@ -431,18 +357,55 @@ User message:
             await update.message.reply_text(f"✨ {quote}")
             return True
 
-        if intent == "enable_nudges":
-            enable_daily_nudges(context, update.effective_user.id, update.effective_chat.id, hour=18, minute=0)
-            await update.message.reply_text("Daily nudges enabled. You'll get a 6:00 PM check-in.")
+        if intent == "recommend":
+            # Show task recommendations
+            rows = recommend(get_tasks_raw())
+            await update.message.reply_text(format_recommendations(rows))
             return True
 
-        if intent == "disable_nudges":
-            removed = disable_daily_nudges(context, update.effective_user.id)
-            await update.message.reply_text("Daily nudges disabled." if removed else "No active nudges to disable.")
+        if intent == "analytics":
+            # Show productivity analytics
+            await update.message.reply_text(summary_last_7_days())
             return True
 
         if intent == "focus_music":
-            await update.message.reply_text(f"Try this while you focus: {get_focus_link()}")
+            song = get_random_song()
+            await update.message.reply_text(f"🎵 {song['name']}\n\n{song['url']}")
+            return True
+
+        if intent == "import_schedule":
+            # Check if message has a photo
+            print(f"DEBUG: import_schedule intent detected. Has photo: {bool(update.message.photo)}")
+            if not update.message.photo:
+                await update.message.reply_text("📸 Please attach a screenshot of your schedule to import tasks.")
+                return True
+            
+            from features.add import create_notion_task
+            from features.schedule_parser import tasks_from_image_bytes
+            
+            await update.message.reply_text("🔍 Analyzing your schedule...")
+            print(f"DEBUG: Processing photo, count: {len(update.message.photo)}")
+            
+            # Get highest resolution photo
+            photo = update.message.photo[-1]
+            file = await context.bot.get_file(photo.file_id)
+            data = await file.download_as_bytearray()
+            
+            try:
+                tasks = tasks_from_image_bytes(bytes(data), "image/jpeg")
+                if not tasks:
+                    await update.message.reply_text("❌ No tasks found. Make sure dates are visible!")
+                    return True
+                
+                created = 0
+                for t in tasks:
+                    res = create_notion_task(t["name"], t["priority"], t.get("due_date"), t.get("project", "")) 
+                    if res.get("success"):
+                        created += 1
+                
+                await update.message.reply_text(f"✅ Imported {created} tasks from your schedule!")
+            except Exception as e:
+                await update.message.reply_text(f"❌ Error: {e}")
             return True
 
         return False
@@ -452,10 +415,27 @@ User message:
         return False
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles normal text messages"""
-    text = update.message.text.strip()
+    """Handles normal text messages and photo captions"""
+    # Get text from either message text or photo caption
+    text = (update.message.text or update.message.caption or "").strip()
+    
+    if not text:
+        return  # No text to process
 
-    if text.lower() in ["hi", "hello", "hey", "yo", "sup", "start"]:
+    # Check if user is replying with a music choice (1-5)
+    if text in ["1", "2", "3", "4", "5"]:
+        from features.music import get_song_by_choice
+        song = get_song_by_choice(text)
+        if song:
+            await update.message.reply_text(
+                f"🎵 Now playing: **{song['name']}**\n\n{song['url']}",
+                parse_mode="Markdown"
+            )
+            return
+
+    # Enhanced greeting detection - catch greetings early
+    greetings = ["hi", "hello", "hey", "yo", "sup", "start", "hi!", "hello!", "hey!", "hi there", "hello there"]
+    if text.lower() in greetings or text.lower().startswith(tuple(greetings)):
         await update.message.reply_text(
             "Hi, I'm Kairos — your productivity chatbot.\nHow can I help you today?"
         )
@@ -470,7 +450,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_lower = text.lower()
     
     # Exclude action keywords that should be handled by natural language processing
-    action_keywords = ["add", "create", "delete", "remove", "mark", "complete", "update", "change"]
+    action_keywords = ["add", "create", "delete", "remove", "mark", "complete", "update", "change", "parse", "import", "extract", "scan"]
     is_action_request = any(action in text_lower for action in action_keywords)
     
     # Only show task list if it's a viewing request, not an action request
@@ -515,39 +495,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # If there's an error fetching tasks, fall through to Gemini
             pass
 
-    await respond_with_gemini(update, text)
-
-
-async def respond_with_gemini(update: Update, text: str):
-    """Send message + Notion context to Gemini"""
+    # Only trigger Q&A if message is substantial (indicates a real question)
+    # Skip very short messages or unclear inputs
+    if len(text.split()) < 3:
+        await update.message.reply_text(
+            "I'm not sure what you mean. Try:\n"
+            "• /tasks — See your tasks\n"
+            "• /add [task] — Add a task\n"
+            "• /motivate — Get motivation\n"
+            "• Or ask me a productivity question!"
+        )
+        return
+    
+    # Trigger Q&A for substantial questions
+    from features.qa import is_productivity_question, get_qa_response, get_brief_task_summary
+    
+    # Check if it's actually a productivity question
+    if not is_productivity_question(text):
+        await update.message.reply_text(
+            "I'm not sure what you're asking. Try:\n"
+            "• Ask a productivity question (e.g., 'How do I manage my time?')\n"
+            "• /tasks — See your tasks\n"
+            "• /motivate — Get motivation"
+        )
+        return
+    
+    # Get brief task summary (not full list to avoid token limit)
     try:
-        notion_context = format_tasks_list(get_tasks_raw())
-
-        prompt = f"""
-You are Kairos — a student-friendly productivity assistant helping university students manage workload, tasks, and priorities.
-Respond factually, concisely, and in a friendly, encouraging tone. Strictly no emojis.
-Never invent meetings, classes, or deadlines. If information is missing, say that it's not available.
-Provide clear, practical suggestions. Be ready to answer short Q&A or FAQs about productivity when asked.
-
-When users ask for examples or format for adding tasks, provide this exact format:
-"/add Task Name [priority] due:DATE project:ProjectName"
-
-Examples to share:
-• /add Review notes due:2025-12-15 project:Math
-
-Or they can say: "add Finish report [high] due:tomorrow project:ADSC 3710"
-
-Task data context (copy structure without emojis if you need to quote):
-{notion_context}
-
-User message:
-{text}
-"""
-        response = llm.generate_content(prompt)
-        await update.message.reply_text(response.text.strip())
-
-    except Exception as e:
-        await update.message.reply_text(f"Gemini API error: {e}")
+        raw_tasks = get_tasks_raw()
+        task_summary = get_brief_task_summary(raw_tasks, max_tasks=5)
+    except:
+        task_summary = None
+    
+    # Get Q&A response
+    response = get_qa_response(text, task_summary)
+    await update.message.reply_text(response)
 
 
 # --- Runner ---
@@ -574,11 +556,8 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("pomodoro_status", pomodoro_status))
     app.add_handler(CommandHandler("pomodoro_break", start_break))
     
-    # Email reminder commands
+    # Email reminder command
     app.add_handler(CommandHandler("reminder", send_reminder))
-    # Support both underscore and no-underscore versions
-    app.add_handler(CommandHandler(["reminder_enable", "reminderenable"], enable_reminders))
-    app.add_handler(CommandHandler(["reminder_disable", "reminderdisable"], disable_reminders))
 
     # Motivational command
     async def motivate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -588,93 +567,6 @@ if __name__ == "__main__":
         await update.message.reply_text(f"✨ {quote}")
     
     app.add_handler(CommandHandler("motivate", motivate_cmd))
-
-    # Old nudges scheduling commands (kept for backwards compatibility)
-    async def nudges_enable_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Enable daily nudges at custom time"""
-        # Parse time from arguments (format: HH:MM or HH:MM AM/PM or just HH)
-        hour = 18
-        minute = 0
-        
-        if context.args:
-            time_str = " ".join(context.args).strip().upper()  # Join all args to handle "6:30 PM"
-            
-            try:
-                # Check for AM/PM
-                is_pm = 'PM' in time_str
-                is_am = 'AM' in time_str
-                
-                # Remove AM/PM from string
-                time_str = time_str.replace('AM', '').replace('PM', '').strip()
-                
-                if ':' in time_str:
-                    # Format: HH:MM
-                    hour_str, min_str = time_str.split(':')
-                    hour = int(hour_str)
-                    minute = int(min_str)
-                else:
-                    # Format: just HH
-                    hour = int(time_str)
-                
-                # Convert 12-hour to 24-hour format
-                if is_pm and hour != 12:
-                    hour += 12
-                elif is_am and hour == 12:
-                    hour = 0
-                
-                # Validate
-                if not (0 <= hour <= 23):
-                    await update.message.reply_text("Hour must be between 0-23. Example: /nudges_enable 6:30 PM or /nudges_enable 18:00")
-                    return
-                if not (0 <= minute <= 59):
-                    await update.message.reply_text("Minute must be between 0-59. Example: /nudges_enable 6:30 PM")
-                    return
-            except ValueError:
-                await update.message.reply_text(
-                    "Invalid time format. Use:\n"
-                    "• /nudges_enable 6:30 PM (12-hour format)\n"
-                    "• /nudges_enable 8:00 PM (12-hour format)\n"
-                    "• /nudges_enable 18:00 (24-hour format)\n"
-                    "• /nudges_enable 7 PM (defaults to evening)\n"
-                    "• /nudges_enable (defaults to 6:00 PM)"
-                )
-                return
-        
-        enable_daily_nudges(context, update.effective_user.id, update.effective_chat.id, hour=hour, minute=minute)
-        
-        # Display time in 12-hour format for user
-        display_hour = hour if hour <= 12 else hour - 12
-        if display_hour == 0:
-            display_hour = 12
-        am_pm = "AM" if hour < 12 else "PM"
-        time_display = f"{display_hour}:{minute:02d} {am_pm}"
-        
-        await update.message.reply_text(
-            f"✅ Daily nudges enabled at {time_display}.\n\n"
-            "💡 Tip: Use /nudge to test it right now!"
-        )
-
-    async def nudges_disable_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        removed = disable_daily_nudges(context, update.effective_user.id)
-        if removed:
-            await update.message.reply_text("Daily nudges disabled.")
-        else:
-            await update.message.reply_text("No active nudges to disable.")
-
-    async def test_nudge_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Send immediate nudge (for testing)"""
-        from features.telegram_reminders import build_nudge_message
-        user_id = update.effective_user.id
-        msg = build_nudge_message(user_id)
-        if msg:
-            await update.message.reply_text(f"💪 **Immediate Nudge Test**\n\n{msg}")
-        else:
-            await update.message.reply_text("You're already crushing it today! No nudge needed.")
-
-    # Support both underscore and no-underscore versions
-    app.add_handler(CommandHandler(["nudges_enable", "nudgesenable"], nudges_enable_cmd))
-    app.add_handler(CommandHandler(["nudges_disable", "nudgesdisable"], nudges_disable_cmd))
-    app.add_handler(CommandHandler("nudge", test_nudge_cmd))
 
     # Task status update commands
     async def done_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -801,48 +693,69 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("analytics", analytics_cmd))
 
     # Focus music
-    async def focus_on_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text(f"Try this while you focus: {get_focus_link()}")
-    # Support multiple aliases: /focus_on, /focuson, /focus
-    app.add_handler(CommandHandler(["focus_on", "focuson", "focus"], focus_on_cmd))
+    async def music_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        from features.music import get_music_menu, get_song_by_choice, get_random_song
+        
+        # If user provided a choice (1-5), play that song
+        if context.args:
+            choice = context.args[0]
+            song = get_song_by_choice(choice)
+            if song:
+                await update.message.reply_text(
+                    f"🎵 Now playing: **{song['name']}**\n\n{song['url']}",
+                    parse_mode="Markdown"
+                )
+            else:
+                await update.message.reply_text("❌ Invalid choice. Pick 1-5!")
+        else:
+            # Show menu
+            await update.message.reply_text(get_music_menu(), parse_mode="Markdown")
+    
+    # Support multiple aliases: /music, /tunes, /play
+    app.add_handler(CommandHandler(["music", "tunes", "play"], music_cmd))
 
     # Import schedule
     async def import_schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Case 1: Pasted text after command
-        text = " ".join(context.args).strip()
-        created = 0
-        if text:
-            from features.add import create_notion_task
-            tasks = parse_text_to_tasks(text)
+        from features.add import create_notion_task
+        from features.schedule_parser import tasks_from_image_bytes
+        
+        # Must reply to a photo/screenshot
+        if not update.message.reply_to_message or not update.message.reply_to_message.photo:
+            await update.message.reply_text(
+                "📸 Send a screenshot of your schedule, then reply with /import_schedule\n\n"
+                "Works best with:\n"
+                "• Tables with dates (Canvas, syllabi)\n"
+                "• Calendar views (Google Calendar)\n"
+                "• Course outline screenshots"
+            )
+            return
+        
+        await update.message.reply_text("🔍 Analyzing your schedule...")
+        
+        # Get highest resolution photo
+        photo = update.message.reply_to_message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        data = await file.download_as_bytearray()
+        
+        try:
+            tasks = tasks_from_image_bytes(bytes(data), "image/jpeg")
+            if not tasks:
+                await update.message.reply_text("❌ No tasks found. Make sure dates are visible!")
+                return
+            
+            created = 0
             for t in tasks:
-                res = create_notion_task(t["name"], t["priority"], t["due_date"], t["project"]) 
+                res = create_notion_task(t["name"], t["priority"], t.get("due_date"), t.get("project", "")) 
                 if res.get("success"):
                     created += 1
-            await update.message.reply_text(f"Imported {created} task(s) from text.")
-            return
-        # Case 2: Replying to a PDF
-        if update.message.reply_to_message and update.message.reply_to_message.document:
-            doc = update.message.reply_to_message.document
-            if doc.file_name and doc.file_name.lower().endswith(".pdf"):
-                file = await context.bot.get_file(doc.file_id)
-                data = await file.download_as_bytearray()
-                try:
-                    tasks = tasks_from_pdf_bytes(bytes(data))
-                except Exception as e:
-                    await update.message.reply_text(f"Could not parse PDF: {e}")
-                    return
-                from features.add import create_notion_task
-                for t in tasks:
-                    res = create_notion_task(t["name"], t["priority"], t["due_date"], t["project"]) 
-                    if res.get("success"):
-                        created += 1
-                await update.message.reply_text(f"Imported {created} task(s) from PDF.")
-                return
-        await update.message.reply_text("Usage: /import_schedule <pasted text> or reply to a PDF with /import_schedule")
+            
+            await update.message.reply_text(f"✅ Imported {created} tasks from your schedule!")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error: {e}")
 
     app.add_handler(CommandHandler("import_schedule", import_schedule_cmd))
     
-    # Message handler (must be last)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    # Message handler (must be last) - handle both text messages and photo captions
+    app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_message))
     
     app.run_polling()

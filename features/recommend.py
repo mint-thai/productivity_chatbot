@@ -22,21 +22,55 @@ def _extract_task_fields(row: dict):
 
 
 def recommend(results: list, limit: int = 3) -> list:
-    """Score tasks by priority and due date proximity."""
+    """Score tasks by priority and due date urgency."""
     scored = []
     now = datetime.now()
+    
     for row in results:
         name, status, priority, due_date = _extract_task_fields(row)
         if status == "Completed":
             continue
-        base = PRIORITY_WEIGHT.get(priority, 1)
-        date_score = 0
+        
+        # Priority scoring: High=50, Medium=30, Low=10
+        priority_score = PRIORITY_WEIGHT.get(priority, 1) * 15
+        
+        # Urgency scoring based on due date
+        urgency_score = 0
         if due_date:
             delta_days = (due_date - now).days
-            # Sooner due increases score; overdue get a small boost
-            date_score = max(0, 10 - max(delta_days, 0)) + (5 if delta_days < 0 else 0)
-        score = base * 10 + date_score
+            
+            if delta_days < 0:
+                # Overdue: boost based on priority
+                days_overdue = abs(delta_days)
+                if priority == "High":
+                    urgency_score = 50 + min(days_overdue * 2, 20)  # Max 70
+                elif priority == "Medium":
+                    urgency_score = 40 + min(days_overdue, 10)  # Max 50
+                else:  # Low
+                    urgency_score = 30 + min(days_overdue, 5)  # Max 35
+            elif delta_days == 0:
+                # Due today: very urgent
+                urgency_score = 45
+            elif delta_days == 1:
+                # Due tomorrow: urgent
+                urgency_score = 40
+            elif delta_days <= 3:
+                # Due within 3 days: important
+                urgency_score = 30
+            elif delta_days <= 7:
+                # Due this week: moderate
+                urgency_score = 20
+            else:
+                # Due later: low urgency (but still factor it in)
+                urgency_score = max(0, 15 - (delta_days - 7) // 7)
+        else:
+            # No due date: lowest urgency
+            urgency_score = 5
+        
+        # Final score: priority + urgency
+        score = priority_score + urgency_score
         scored.append((score, name, row))
+    
     scored.sort(key=lambda x: x[0], reverse=True)
     return [row for _, __, row in scored[:limit]]
 

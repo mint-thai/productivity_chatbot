@@ -52,14 +52,113 @@ def log_session_end(user_id: int, kind: str):
 
 
 def summary_last_7_days() -> str:
+    from datetime import timedelta
+    from features.notion_utils import get_tasks_raw
+    
     with _conn() as conn:
+        # Pomodoro sessions
         cur = conn.execute("SELECT COUNT(*) FROM pomodoro_sessions WHERE kind='work' AND started_at >= datetime('now', '-7 days')")
         work_count = cur.fetchone()[0]
-        cur = conn.execute("SELECT COUNT(*) FROM pomodoro_sessions WHERE kind='break' AND started_at >= datetime('now', '-7 days')")
-        break_count = cur.fetchone()[0]
-    lines = ["Your last 7 days:"]
-    lines.append(f"- Pomodoro work sessions: {work_count}")
-    lines.append(f"- Break sessions: {break_count}")
+        
+        # Habit logs
+        cur = conn.execute("SELECT COUNT(*) FROM habit_logs WHERE logged_at >= datetime('now', '-7 days')")
+        habit_count = cur.fetchone()[0]
+        
+        # Daily breakdown for pomodoros
+        cur = conn.execute("""
+            SELECT date(started_at) as day, COUNT(*) as count 
+            FROM pomodoro_sessions 
+            WHERE kind='work' AND started_at >= datetime('now', '-7 days')
+            GROUP BY date(started_at)
+            ORDER BY day DESC
+        """)
+        daily_pomodoro = cur.fetchall()
+        
+        # Daily breakdown for habits
+        cur = conn.execute("""
+            SELECT date(logged_at) as day, COUNT(*) as count 
+            FROM habit_logs 
+            WHERE logged_at >= datetime('now', '-7 days')
+            GROUP BY date(logged_at)
+            ORDER BY day DESC
+        """)
+        daily_habits = cur.fetchall()
+    
+    # Get completed tasks from Notion
+    try:
+        tasks = get_tasks_raw()
+        completed_count = sum(1 for task in tasks 
+                             if task.get("properties", {}).get("Status", {}).get("status", {}).get("name") == "Completed")
+        in_progress_count = sum(1 for task in tasks 
+                               if task.get("properties", {}).get("Status", {}).get("status", {}).get("name") == "In progress")
+        not_started_count = sum(1 for task in tasks 
+                               if task.get("properties", {}).get("Status", {}).get("status", {}).get("name") == "Not started")
+    except:
+        completed_count = 0
+        in_progress_count = 0
+        not_started_count = 0
+    
+    # Calculate metrics
+    total_minutes = work_count * 25
+    hours = total_minutes // 60
+    minutes = total_minutes % 60
+    
+    # Calculate productivity score
+    activity_score = (work_count * 2) + (habit_count * 1) + (completed_count * 3)
+    if activity_score >= 50:
+        trend = "On fire"
+    elif activity_score >= 30:
+        trend = "Strong momentum"
+    elif activity_score >= 15:
+        trend = "Steady progress"
+    else:
+        trend = "Building habits"
+    
+    # Build report
+    lines = ["📊 Productivity Analytics (Last 7 Days)\n"]
+    
+    # Overview
+    lines.append("📈 OVERVIEW:")
+    lines.append(f"  Focus sessions: {work_count} ({hours}h {minutes}m)")
+    lines.append(f"  Habits logged: {habit_count}")
+    lines.append(f"  Tasks completed: {completed_count}")
+    lines.append(f"  Trend: {trend}\n")
+    
+    # Task breakdown
+    total_tasks = completed_count + in_progress_count + not_started_count
+    if total_tasks > 0:
+        completion_rate = (completed_count / total_tasks) * 100
+        lines.append("✅ TASK PROGRESS:")
+        lines.append(f"  Completed: {completed_count}/{total_tasks} ({completion_rate:.0f}%)")
+        lines.append(f"  In progress: {in_progress_count}")
+        lines.append(f"  Not started: {not_started_count}\n")
+    
+    # Daily activity visualization - start from Monday
+    pomodoro_dict = {day: count for day, count in daily_pomodoro}
+    habit_dict = {day: count for day, count in daily_habits}
+    today = datetime.utcnow().date()
+    
+    # Find the most recent Monday
+    days_since_monday = today.weekday()  # 0 = Monday, 6 = Sunday
+    monday = today - timedelta(days=days_since_monday)
+    
+    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    
+    lines.append("📅 DAILY ACTIVITY:")
+    for i in range(7):  # Monday to Sunday
+        day_date = monday + timedelta(days=i)
+        day_str = day_date.strftime("%Y-%m-%d")
+        pom_count = pomodoro_dict.get(day_str, 0)
+        hab_count = habit_dict.get(day_str, 0)
+        day_name = days[i]
+        
+        if day_date == today:
+            day_label = f"{day_name} (today)"
+        else:
+            day_label = day_name
+        
+        lines.append(f"  {day_label:13} {pom_count} sessions, {hab_count} habits")
+    
     return "\n".join(lines)
 
 

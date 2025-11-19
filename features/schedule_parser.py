@@ -1,66 +1,75 @@
 from __future__ import annotations
 from typing import List, Dict
-from datetime import datetime
-import io
+import os
+import json
+import re
 
 try:
-    from PyPDF2 import PdfReader
+    import google.generativeai as genai
+    from dotenv import load_dotenv
+    load_dotenv()
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    if GOOGLE_API_KEY:
+        genai.configure(api_key=GOOGLE_API_KEY)
+        llm = genai.GenerativeModel("gemini-2.5-flash")
+    else:
+        llm = None
 except Exception:
-    PdfReader = None
+    llm = None
 
 
-EXAMPLE_TEXT = """
-Course: MATH 101
-Task: Homework 3 due:2025-11-20 [high]
-Task: Midterm due:2025-11-25 [high]
-Task: Review notes due:2025-11-18 [medium]
+def tasks_from_image_bytes(file_bytes: bytes, mime_type: str = "image/jpeg") -> List[Dict]:
+    """Parse schedule from image screenshot using Gemini vision. Optimized for tables with dates."""
+    
+    if not llm:
+        raise RuntimeError("Gemini API not configured. Please set GOOGLE_API_KEY in .env")
+    
+    try:
+        # Upload image to Gemini
+        import google.generativeai as genai
+        
+        # Create a temporary file-like object
+        image_part = {
+            "mime_type": mime_type,
+            "data": file_bytes
+        }
+        
+        prompt = """
+Analyze this schedule screenshot and extract all assignments, exams, projects, and deadlines.
+
+This is likely a table/calendar with dates. Look for:
+- Assignment names
+- Due dates (any format: "Nov 25", "11/25/2025", "November 25", etc.)
+- Task types (exam, assignment, project, quiz, etc.)
+- Course codes or names
+
+For each item found, extract:
+- name: Assignment/exam/project name (be specific)
+- due_date: Due date in YYYY-MM-DD format. If you see "Nov 25" or "11/25", assume 2025.
+- priority: "High" for exams/final projects/major deadlines, "Medium" for regular assignments/quizzes, "Low" for readings/participation
+- project: Course code or name (if visible)
+
+Output ONLY a JSON array. No explanations, no markdown, just the JSON array.
+
+Example:
+[
+  {"name": "Assignment 1", "due_date": "2025-11-25", "priority": "Medium", "project": "COMP 101"},
+  {"name": "Midterm Exam", "due_date": "2025-12-05", "priority": "High", "project": "COMP 101"}
+]
+
+If you cannot read the image clearly or find any tasks, return: []
 """
-
-
-def parse_text_to_tasks(text: str) -> List[Dict]:
-    tasks = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or not ("due:" in line or "due:" in line.lower()):
-            continue
-        name = line
-        priority = "Medium"
-        if "[high]" in line.lower():
-            priority = "High"
-            name = name.replace("[high]", "").strip()
-        elif "[low]" in line.lower():
-            priority = "Low"
-            name = name.replace("[low]", "").strip()
-        elif "[medium]" in line.lower():
-            priority = "Medium"
-            name = name.replace("[medium]", "").strip()
-        due_date = None
-        if "due:" in line.lower():
-            parts = line.lower().split("due:")
-            before = parts[0]
-            after = line[len(before) + 4:]
-            token = after.strip().split()[0]
-            try:
-                _ = datetime.strptime(token, "%Y-%m-%d")
-                due_date = token
-                name = before.strip()
-            except Exception:
-                pass
-        if name:
-            tasks.append({"name": name.strip(), "priority": priority, "due_date": due_date, "project": ""})
-    return tasks
-
-
-def parse_pdf_bytes(file_bytes: bytes) -> str:
-    if not PdfReader:
-        raise RuntimeError("PyPDF2 not installed. Please add PyPDF2 to requirements.txt")
-    reader = PdfReader(io.BytesIO(file_bytes))
-    text = []
-    for page in reader.pages:
-        text.append(page.extract_text() or "")
-    return "\n".join(text)
-
-
-def tasks_from_pdf_bytes(file_bytes: bytes) -> List[Dict]:
-    text = parse_pdf_bytes(file_bytes)
-    return parse_text_to_tasks(text)
+        
+        response = llm.generate_content([prompt, image_part])
+        raw = response.text.strip()
+        
+        # Extract JSON array
+        match = re.search(r'\[[\s\S]*\]', raw)
+        if not match:
+            return []
+        
+        tasks = json.loads(match.group(0))
+        return tasks
+        
+    except Exception as e:
+        raise RuntimeError(f"Failed to parse image: {e}")
